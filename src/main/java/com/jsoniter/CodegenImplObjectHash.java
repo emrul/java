@@ -4,10 +4,11 @@ import com.jsoniter.spi.*;
 
 import java.util.*;
 
-public class CodegenImplObjectHash {
+class CodegenImplObjectHash {
 
     // the implementation is from dsljson, it is the fastest although has the risk not matching field strictly
-    public static String genObjectUsingHash(Class clazz, ClassDescriptor desc) {
+    public static String genObjectUsingHash(ClassDescriptor desc) {
+        Class clazz = desc.clazz;
         StringBuilder lines = new StringBuilder();
         // === if null, return null
         append(lines, "java.lang.Object existingObj = com.jsoniter.CodegenAccess.resetExistingObject(iter);");
@@ -43,12 +44,15 @@ public class CodegenImplObjectHash {
         append(lines, "} // end of if end");
         append(lines, "} else { com.jsoniter.CodegenAccess.unreadByte(iter); }// end of if not quote");
         for (Binding field : desc.fields) {
+            if (field.fromNames.length == 0) {
+                continue;
+            }
             appendVarDef(lines, field);
         }
         for (Binding setter : desc.setters) {
             appendVarDef(lines, setter);
         }
-        for (WrapperDescriptor setter : desc.wrappers) {
+        for (WrapperDescriptor setter : desc.bindingTypeWrappers) {
             for (Binding param : setter.parameters) {
                 appendVarDef(lines, param);
             }
@@ -77,11 +81,11 @@ public class CodegenImplObjectHash {
             int intHash = calcHash(fromName);
             if (intHash == 0) {
                 // hash collision, 0 can not be used as sentinel
-                return CodegenImplObjectStrict.genObjectUsingStrict(clazz, desc);
+                return CodegenImplObjectStrict.genObjectUsingStrict(desc);
             }
             if (knownHashes.contains(intHash)) {
                 // hash collision with other field can not be used as sentinel
-                return CodegenImplObjectStrict.genObjectUsingStrict(clazz, desc);
+                return CodegenImplObjectStrict.genObjectUsingStrict(desc);
             }
             knownHashes.add(intHash);
             append(lines, "case " + intHash + ": ");
@@ -93,12 +97,15 @@ public class CodegenImplObjectHash {
         append(lines, "} while (com.jsoniter.CodegenAccess.nextTokenIsComma(iter));");
         append(lines, CodegenImplNative.getTypeName(clazz) + " obj = {{newInst}};");
         for (Binding field : desc.fields) {
+            if (field.fromNames.length == 0) {
+                continue;
+            }
             append(lines, String.format("obj.%s = _%s_;", field.field.getName(), field.name));
         }
         for (Binding setter : desc.setters) {
             append(lines, String.format("obj.%s(_%s_);", setter.method.getName(), setter.name));
         }
-        appendWrappers(desc.wrappers, lines);
+        appendWrappers(desc.bindingTypeWrappers, lines);
         append(lines, "return obj;");
         return lines.toString()
                 .replace("{{clazz}}", clazz.getCanonicalName())

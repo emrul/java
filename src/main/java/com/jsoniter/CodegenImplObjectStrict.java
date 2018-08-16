@@ -2,6 +2,7 @@ package com.jsoniter;
 
 import com.jsoniter.spi.*;
 
+import java.lang.reflect.Method;
 import java.util.*;
 
 import static com.jsoniter.CodegenImplObjectHash.appendVarDef;
@@ -20,7 +21,7 @@ class CodegenImplObjectStrict {
         put("long", "0");
     }};
 
-    public static String genObjectUsingStrict(Class clazz, ClassDescriptor desc) {
+    public static String genObjectUsingStrict(ClassDescriptor desc) {
         List<Binding> allBindings = desc.allDecoderBindings();
         int lastRequiredIdx = assignMaskForRequiredProperties(allBindings);
         boolean hasRequiredBinding = lastRequiredIdx > 0;
@@ -67,22 +68,25 @@ class CodegenImplObjectStrict {
             }
             append(lines, "}");
             for (Binding field : desc.fields) {
+                if (field.fromNames.length == 0) {
+                    continue;
+                }
                 appendVarDef(lines, field);
             }
             for (Binding setter : desc.setters) {
                 appendVarDef(lines, setter);
             }
         }
-        for (WrapperDescriptor wrapper : desc.wrappers) {
+        for (WrapperDescriptor wrapper : desc.bindingTypeWrappers) {
             for (Binding param : wrapper.parameters) {
                 appendVarDef(lines, param);
             }
         }
         // === bind first field
-        if (desc.onExtraProperties != null) {
+        if (desc.onExtraProperties != null || !desc.keyValueTypeWrappers.isEmpty()) {
             append(lines, "java.util.Map extra = null;");
         }
-        append(lines, "com.jsoniter.Slice field = com.jsoniter.CodegenAccess.readObjectFieldAsSlice(iter);");
+        append(lines, "com.jsoniter.spi.Slice field = com.jsoniter.CodegenAccess.readObjectFieldAsSlice(iter);");
         append(lines, "boolean once = true;");
         append(lines, "while (once) {");
         append(lines, "once = false;");
@@ -90,6 +94,9 @@ class CodegenImplObjectStrict {
         if (desc.ctor.parameters.isEmpty()) {
             // if not field or setter, the value will set to temp variable
             for (Binding field : desc.fields) {
+                if (field.fromNames.length == 0) {
+                    continue;
+                }
                 rendered = updateBindingSetOp(rendered, field);
             }
             for (Binding setter : desc.setters) {
@@ -121,25 +128,43 @@ class CodegenImplObjectStrict {
         if (desc.onExtraProperties != null) {
             appendSetExtraProperteis(lines, desc);
         }
+        if (!desc.keyValueTypeWrappers.isEmpty()) {
+            appendSetExtraToKeyValueTypeWrappers(lines, desc);
+        }
         if (!desc.ctor.parameters.isEmpty()) {
-            append(lines, String.format("%s obj = {{newInst}};", CodegenImplNative.getTypeName(clazz)));
+            append(lines, String.format("%s obj = {{newInst}};", CodegenImplNative.getTypeName(desc.clazz)));
             for (Binding field : desc.fields) {
+                if (field.fromNames.length == 0) {
+                    continue;
+                }
                 append(lines, String.format("obj.%s = _%s_;", field.field.getName(), field.name));
             }
             for (Binding setter : desc.setters) {
                 append(lines, String.format("obj.%s(_%s_);", setter.method.getName(), setter.name));
             }
         }
-        appendWrappers(desc.wrappers, lines);
+        appendWrappers(desc.bindingTypeWrappers, lines);
         append(lines, "return obj;");
         return lines.toString()
-                .replace("{{clazz}}", clazz.getCanonicalName())
-                .replace("{{newInst}}", CodegenImplObjectHash.genNewInstCode(clazz, desc.ctor));
+                .replace("{{clazz}}", desc.clazz.getCanonicalName())
+                .replace("{{newInst}}", CodegenImplObjectHash.genNewInstCode(desc.clazz, desc.ctor));
+    }
+
+    private static void appendSetExtraToKeyValueTypeWrappers(StringBuilder lines, ClassDescriptor desc) {
+        append(lines, "java.util.Iterator extraIter = extra.entrySet().iterator();");
+        append(lines, "while(extraIter.hasNext()) {");
+        for (Method wrapper : desc.keyValueTypeWrappers) {
+            append(lines, "java.util.Map.Entry entry = (java.util.Map.Entry)extraIter.next();");
+            append(lines, "String key = entry.getKey().toString();");
+            append(lines, "com.jsoniter.any.Any value = (com.jsoniter.any.Any)entry.getValue();");
+            append(lines, String.format("obj.%s(key, value.object());", wrapper.getName()));
+        }
+        append(lines, "}");
     }
 
     private static void appendSetExtraProperteis(StringBuilder lines, ClassDescriptor desc) {
         Binding onExtraProperties = desc.onExtraProperties;
-        if (ParameterizedTypeImpl.isSameClass(onExtraProperties.valueType, Map.class)) {
+        if (GenericsHelper.isSameClass(onExtraProperties.valueType, Map.class)) {
             if (onExtraProperties.field != null) {
                 append(lines, String.format("obj.%s = extra;", onExtraProperties.field.getName()));
             } else {
@@ -175,6 +200,9 @@ class CodegenImplObjectStrict {
     }
 
     private static String updateBindingSetOp(String rendered, Binding binding) {
+        if (binding.fromNames.length == 0) {
+            return rendered;
+        }
         while (true) {
             String marker = "_" + binding.name + "_";
             int start = rendered.indexOf(marker);
@@ -230,15 +258,15 @@ class CodegenImplObjectStrict {
     }
 
     private static void appendOnUnknownField(StringBuilder lines, ClassDescriptor desc) {
-        if (desc.asExtraForUnknownProperties) {
-            if (desc.onExtraProperties == null) {
-                append(lines, "throw new com.jsoniter.spi.JsonException('extra property: ' + field.toString());".replace('\'', '"'));
-            } else {
+        if (desc.asExtraForUnknownProperties && desc.onExtraProperties == null) {
+            append(lines, "throw new com.jsoniter.spi.JsonException('extra property: ' + field.toString());".replace('\'', '"'));
+        } else {
+            if (desc.asExtraForUnknownProperties || !desc.keyValueTypeWrappers.isEmpty()) {
                 append(lines, "if (extra == null) { extra = new java.util.HashMap(); }");
                 append(lines, "extra.put(field.toString(), iter.readAny());");
+            } else {
+                append(lines, "iter.skip();");
             }
-        } else {
-            append(lines, "iter.skip();");
         }
     }
 
@@ -338,7 +366,7 @@ class CodegenImplObjectStrict {
                 .replace("{{clazz}}", clazz.getCanonicalName())
                 .replace("{{newInst}}", CodegenImplObjectHash.genNewInstCode(clazz, ctor));
     }
-    
+
     static void append(StringBuilder lines, String str) {
         lines.append(str);
         lines.append("\n");

@@ -25,7 +25,7 @@ public class Binding {
     public boolean asExtraWhenPresent;
     public boolean isNullable = true;
     public boolean isCollectionValueNullable = true;
-    public boolean shouldOmitNull = true;
+    public OmitValue defaultValueToOmit;
     // then this property will not be unknown
     // but we do not want to bind it anywhere
     public boolean shouldSkip;
@@ -33,9 +33,9 @@ public class Binding {
     public int idx;
     public long mask;
 
-    public Binding(Class clazz, Map<String, Type> lookup, Type valueType) {
-        this.clazz = clazz;
-        this.clazzTypeLiteral = TypeLiteral.create(clazz);
+    public Binding(ClassInfo classInfo, Map<String, Type> lookup, Type valueType) {
+        this.clazz = classInfo.clazz;
+        this.clazzTypeLiteral = TypeLiteral.create(classInfo.type);
         this.valueType = substituteTypeVariables(lookup, valueType);
         this.valueTypeLiteral = TypeLiteral.create(this.valueType);
     }
@@ -58,11 +58,12 @@ public class Binding {
             for (int i = 0; i < args.length; i++) {
                 args[i] = substituteTypeVariables(lookup, args[i]);
             }
-            return new ParameterizedTypeImpl(args, pType.getOwnerType(), pType.getRawType());
+            return GenericsHelper.createParameterizedType(args, pType.getOwnerType(), pType.getRawType());
         }
         if (type instanceof GenericArrayType) {
             GenericArrayType gaType = (GenericArrayType) type;
-            return new GenericArrayTypeImpl(substituteTypeVariables(lookup, gaType.getGenericComponentType()));
+            Type componentType = substituteTypeVariables(lookup, gaType.getGenericComponentType());
+            return GenericsHelper.createGenericArrayType(componentType);
         }
         return type;
     }
@@ -106,12 +107,14 @@ public class Binding {
         Binding binding = (Binding) o;
 
         if (clazz != null ? !clazz.equals(binding.clazz) : binding.clazz != null) return false;
+        if (method != null ? !method.equals(binding.method) : binding.method != null) return false;
         return name != null ? name.equals(binding.name) : binding.name == null;
     }
 
     @Override
     public int hashCode() {
         int result = clazz != null ? clazz.hashCode() : 0;
+        result = 31 * result + (method != null ? method.hashCode() : 0);
         result = 31 * result + (name != null ? name.hashCode() : 0);
         return result;
     }

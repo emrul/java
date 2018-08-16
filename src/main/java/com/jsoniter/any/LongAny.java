@@ -2,9 +2,10 @@ package com.jsoniter.any;
 
 import com.jsoniter.ValueType;
 import com.jsoniter.output.JsonStream;
-import com.jsoniter.spi.TypeLiteral;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 
 class LongAny extends Any {
 
@@ -47,6 +48,16 @@ class LongAny extends Any {
     @Override
     public double toDouble() {
         return val;
+    }
+
+    @Override
+    public BigInteger toBigInteger() {
+        return BigInteger.valueOf(val);
+    }
+
+    @Override
+    public BigDecimal toBigDecimal() {
+        return BigDecimal.valueOf(val);
     }
 
     @Override

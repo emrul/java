@@ -1,6 +1,8 @@
 package com.jsoniter.any;
 
 import com.jsoniter.JsonIterator;
+import com.jsoniter.output.EncodingMode;
+import com.jsoniter.output.JsonStream;
 import junit.framework.TestCase;
 
 import java.util.ArrayList;
@@ -62,5 +64,17 @@ public class TestArray extends TestCase {
         assertEquals(2, iter.next().toInt());
         assertEquals(3, iter.next().toInt());
         assertFalse(iter.hasNext());
+    }
+
+    public void test_equals_and_hashcode() {
+        Any obj1 = JsonIterator.deserialize("[1,2,3]");
+        Any obj2 = JsonIterator.deserialize("[1, 2, 3]");
+        assertEquals(obj1, obj2);
+        assertEquals(obj1.hashCode(), obj2.hashCode());
+    }
+
+    public void test_null() {
+        Any x = JsonIterator.deserialize("{\"test\":null}");
+        assertFalse(x.get("test").iterator().hasNext());
     }
 }

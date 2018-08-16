@@ -2,12 +2,22 @@ package com.jsoniter.output;
 
 import com.jsoniter.ValueType;
 import com.jsoniter.any.*;
+import com.jsoniter.spi.JsonException;
 import junit.framework.TestCase;
+import org.junit.Rule;
+import org.junit.rules.ExpectedException;
 
 import java.util.Arrays;
 import java.util.HashMap;
 
 public class TestAny extends TestCase {
+
+    @Rule
+    public final ExpectedException exception = ExpectedException.none();
+
+    static {
+//        JsonStream.setMode(EncodingMode.DYNAMIC_MODE);
+    }
 
     public void test_int() {
         Any any = Any.wrap(100);
@@ -116,7 +126,13 @@ public class TestAny extends TestCase {
         assertEquals("[1,2,3]", any.toString());
     }
 
-    public void test_map() {
+    public void test_not_found() {
+        Any any = Any.wrap(new int[]{1, 2, 3});
+        exception.expect(JsonException.class);
+        any.get("not", "found", "path");
+    }
+
+    public void skip_map() {
         HashMap<String, Object> val = new HashMap<String, Object>();
         val.put("hello", 1);
         val.put("world", "!!");
@@ -133,7 +149,7 @@ public class TestAny extends TestCase {
         public Any field2;
     }
 
-    public void test_my_class() {
+    public void skip_my_class() {
         MyClass val = new MyClass();
         val.field1 = "hello";
         val.field2 = Any.wrap(new long[]{1, 2});

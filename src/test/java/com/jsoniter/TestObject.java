@@ -1,9 +1,9 @@
 package com.jsoniter;
 
 import com.jsoniter.annotation.JsonProperty;
-import com.jsoniter.annotation.JsoniterAnnotationSupport;
 import com.jsoniter.any.Any;
 import com.jsoniter.fuzzy.MaybeEmptyArrayDecoder;
+import com.jsoniter.spi.DecodingMode;
 import com.jsoniter.spi.EmptyExtension;
 import com.jsoniter.spi.JsonException;
 import com.jsoniter.spi.JsoniterSpi;
@@ -12,7 +12,6 @@ import junit.framework.TestCase;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Iterator;
 import java.util.Map;
 
 public class TestObject extends TestCase {
@@ -37,7 +36,7 @@ public class TestObject extends TestCase {
         assertNull(simpleObj.field1);
         iter.reset(iter.buf);
         Object obj = iter.read(Object.class);
-        assertEquals(0, ((Map)obj).size());
+        assertEquals(0, ((Map) obj).size());
         iter.reset(iter.buf);
         Any any = iter.readAny();
         assertEquals(0, any.size());
@@ -57,7 +56,7 @@ public class TestObject extends TestCase {
         assertEquals("hello", any.toString("field1"));
         assertEquals(ValueType.INVALID, any.get("field2").valueType());
         iter.reset(iter.buf);
-        assertEquals("hello", ((Map)iter.read()).get("field1"));
+        assertEquals("hello", ((Map) iter.read()).get("field1"));
     }
 
     public void test_two_fields() throws IOException {
@@ -167,6 +166,7 @@ public class TestObject extends TestCase {
             WORLD,
             WOW
         }
+
         public MyEnum field1;
     }
 
@@ -185,15 +185,20 @@ public class TestObject extends TestCase {
         assertEquals(TestObject5.MyEnum.WOW, obj.field1);
     }
 
+    public static class TestObject6_field1 {
+        public int a;
+    }
+
     public static class TestObject6 {
         @JsonProperty(decoder = MaybeEmptyArrayDecoder.class)
-        public Map<String, Object> field1;
+        public TestObject6_field1 field1;
     }
 
     public void test_maybe_empty_array_field() {
-        JsoniterAnnotationSupport.enable();
         TestObject6 obj = JsonIterator.deserialize("{\"field1\":[]}", TestObject6.class);
         assertNull(obj.field1);
+        obj = JsonIterator.deserialize("{\"field1\":{\"a\":1}}", TestObject6.class);
+        assertEquals(1, obj.field1.a);
     }
 
     public void test_iterator() {
@@ -224,6 +229,7 @@ public class TestObject extends TestCase {
 
     public static class TestObject7 {
         public PrivateSub field1;
+
         public void setFieldXXX(PrivateSub obj) {
         }
     }
@@ -233,9 +239,32 @@ public class TestObject extends TestCase {
         assertNull(obj.field1);
     }
 
-    public void test_object_lazy_any_to_string() {
+    public static class TestObject8 {
+        public String field1;
+
+        @JsonProperty(from = {"field-1"})
+        public void setField1(String obj) {
+            field1 = "!!!" + obj;
+        }
+    }
+
+    public void test_setter_is_preferred() throws IOException {
+        TestObject8 obj = JsonIterator.deserialize("{\"field-1\":\"hello\"}", TestObject8.class);
+        assertEquals("!!!hello", obj.field1);
+    }
+
+    public void skip_object_lazy_any_to_string() {
         Any any = JsonIterator.deserialize("{\"field1\":1,\"field2\":2,\"field3\":3}");
         any.asMap().put("field4", Any.wrap(4));
         assertEquals("{\"field1\":1,\"field3\":3,\"field2\":2,\"field4\":4}", any.toString());
+    }
+
+    public static class TestObject9 {
+        public int 字段;
+    }
+
+    public void test_non_ascii_field() {
+        TestObject9 obj = JsonIterator.deserialize("{\"字段\":100}", TestObject9.class);
+        assertEquals(100, obj.字段);
     }
 }

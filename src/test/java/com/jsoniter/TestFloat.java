@@ -5,6 +5,7 @@ import org.junit.experimental.categories.Category;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.math.BigDecimal;
 
 public class TestFloat extends TestCase {
 
@@ -34,14 +35,24 @@ public class TestFloat extends TestCase {
     public void test_decimal_places() throws IOException {
         assertEquals(Long.MAX_VALUE, parseFloat("9223372036854775807,"), 0.01f);
         assertEquals(Long.MAX_VALUE, parseDouble("9223372036854775807,"), 0.01f);
+        assertEquals(Long.MIN_VALUE, parseDouble("-9223372036854775808,"), 0.01f);
         assertEquals(9923372036854775807f, parseFloat("9923372036854775807,"), 0.01f);
+        assertEquals(-9923372036854775808f, parseFloat("-9923372036854775808,"), 0.01f);
         assertEquals(9923372036854775807d, parseDouble("9923372036854775807,"), 0.01f);
+        assertEquals(-9923372036854775808d, parseDouble("-9923372036854775808,"), 0.01f);
         assertEquals(720368.54775807f, parseFloat("720368.54775807,"), 0.01f);
+        assertEquals(-720368.54775807f, parseFloat("-720368.54775807,"), 0.01f);
         assertEquals(720368.54775807d, parseDouble("720368.54775807,"), 0.01f);
+        assertEquals(-720368.54775807d, parseDouble("-720368.54775807,"), 0.01f);
         assertEquals(72036.854775807f, parseFloat("72036.854775807,"), 0.01f);
         assertEquals(72036.854775807d, parseDouble("72036.854775807,"), 0.01f);
         assertEquals(720368.54775807f, parseFloat("720368.547758075,"), 0.01f);
         assertEquals(720368.54775807d, parseDouble("720368.547758075,"), 0.01f);
+    }
+
+    public void test_combination_of_dot_and_exponent() throws IOException {
+        double v = JsonIterator.parse("8.37377E9").readFloat();
+        assertEquals(Double.valueOf("8.37377E9"), v, 1000d);
     }
 
     @Category(StreamingCategory.class)
@@ -66,4 +77,24 @@ public class TestFloat extends TestCase {
             return JsonIterator.parse(input).readDouble();
         }
     }
+
+    public void testBigDecimal() {
+        BigDecimal number = JsonIterator.deserialize("100.1", BigDecimal.class);
+        assertEquals(new BigDecimal("100.1"), number);
+    }
+
+    public void testChooseDouble() {
+        Object number = JsonIterator.deserialize("1.1", Object.class);
+        assertEquals(1.1, number);
+        number = JsonIterator.deserialize("1.0", Object.class);
+        assertEquals(1.0, number);
+    }
+
+    public void testInfinity() {
+        assertTrue(JsonIterator.deserialize("\"-infinity\"", Double.class) == Double.NEGATIVE_INFINITY);
+        assertTrue(JsonIterator.deserialize("\"-infinity\"", Float.class) == Float.NEGATIVE_INFINITY);
+        assertTrue(JsonIterator.deserialize("\"infinity\"", Double.class) == Double.POSITIVE_INFINITY);
+        assertTrue(JsonIterator.deserialize("\"infinity\"", Float.class) == Float.POSITIVE_INFINITY);
+    }
+
 }

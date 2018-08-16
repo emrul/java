@@ -1,9 +1,6 @@
 package com.jsoniter;
 
-import com.jsoniter.spi.Decoder;
-import com.jsoniter.spi.JsonException;
-import com.jsoniter.spi.JsoniterSpi;
-import com.jsoniter.spi.TypeLiteral;
+import com.jsoniter.spi.*;
 
 import java.io.IOException;
 import java.util.Collection;
@@ -144,6 +141,15 @@ public class CodegenAccess {
         return IterImpl.readSlice(iter);
     }
 
+    public static final Object readMapKey(String cacheKey, JsonIterator iter) throws IOException {
+        Decoder mapKeyDecoder = JsoniterSpi.getMapKeyDecoder(cacheKey);
+        Object key = mapKeyDecoder.decode(iter);
+        if (IterImpl.nextToken(iter) != ':') {
+            throw iter.reportError("readMapKey", "expect :");
+        }
+        return key;
+    }
+
     final static boolean skipWhitespacesWithoutLoadMore(JsonIterator iter) throws IOException {
         for (int i = iter.head; i < iter.tail; i++) {
             byte c = iter.buf[i];
@@ -160,8 +166,8 @@ public class CodegenAccess {
         return true;
     }
 
-    public static void staticGenDecoders(TypeLiteral[] typeLiterals) {
-        Codegen.staticGenDecoders(typeLiterals);
+    public static void staticGenDecoders(TypeLiteral[] typeLiterals, StaticCodegenTarget staticCodegenTarget) {
+        Codegen.staticGenDecoders(typeLiterals, staticCodegenTarget);
     }
 
     public static int head(JsonIterator iter) {
@@ -182,5 +188,13 @@ public class CodegenAccess {
 
     public static void skipFixedBytes(JsonIterator iter, int n) throws IOException {
         IterImpl.skipFixedBytes(iter, n);
+    }
+
+    public static class StaticCodegenTarget {
+        public String outputDir;
+
+        public StaticCodegenTarget(String outputDir) {
+            this.outputDir = outputDir;
+        }
     }
 }

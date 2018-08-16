@@ -49,9 +49,7 @@ class StreamImplNumber {
     private static final byte[] MIN_INT = "-2147483648".getBytes();
 
     public static final void writeInt(final JsonStream stream, int value) throws IOException {
-        if (stream.buf.length - stream.count < 11) {
-            stream.flushBuffer();
-        }
+        stream.ensure(12);
         byte[] buf = stream.buf;
         int pos = stream.count;
         if (value < 0) {
@@ -117,9 +115,7 @@ class StreamImplNumber {
     private static final byte[] MIN_LONG = "-9223372036854775808".getBytes();
 
     public static final void writeLong(final JsonStream stream, long value) throws IOException {
-        if (stream.buf.length - stream.count < 21) {
-            stream.flushBuffer();
-        }
+        stream.ensure(22);
         byte[] buf = stream.buf;
         int pos = stream.count;
         if (value < 0) {
@@ -216,10 +212,18 @@ class StreamImplNumber {
 
     public static final void writeFloat(JsonStream stream, float val) throws IOException {
         if (val < 0) {
+            if (val == Float.NEGATIVE_INFINITY) {
+                stream.writeVal("-Infinity");
+                return;
+            }
             stream.write('-');
             val = -val;
         }
         if (val > 0x4ffffff) {
+            if (val == Float.POSITIVE_INFINITY) {
+                stream.writeVal("Infinity");
+                return;
+            }
             stream.writeRaw(Float.toString(val));
             return;
         }
@@ -232,9 +236,7 @@ class StreamImplNumber {
             return;
         }
         stream.write('.');
-        if (stream.buf.length - stream.count < 10) {
-            stream.flushBuffer();
-        }
+        stream.ensure(11);
         for (int p = precision - 1; p > 0 && fval < POW10[p]; p--) {
             stream.buf[stream.count++] = '0';
         }
@@ -246,10 +248,18 @@ class StreamImplNumber {
 
     public static final void writeDouble(JsonStream stream, double val) throws IOException {
         if (val < 0) {
+            if (val == Double.NEGATIVE_INFINITY) {
+                stream.writeVal("-Infinity");
+                return;
+            }
             val = -val;
             stream.write('-');
         }
         if (val > 0x4ffffff) {
+            if (val == Double.POSITIVE_INFINITY) {
+                stream.writeVal("Infinity");
+                return;
+            }
             stream.writeRaw(Double.toString(val));
             return;
         }
@@ -262,9 +272,7 @@ class StreamImplNumber {
             return;
         }
         stream.write('.');
-        if (stream.buf.length - stream.count < 10) {
-            stream.flushBuffer();
-        }
+        stream.ensure(11);
         for (int p = precision - 1; p > 0 && fval < POW10[p]; p--) {
             stream.buf[stream.count++] = '0';
         }

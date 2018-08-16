@@ -9,7 +9,7 @@ import java.lang.reflect.Type;
 import java.util.Collection;
 import java.util.Iterator;
 
-class ReflectionCollectionEncoder implements Encoder {
+class ReflectionCollectionEncoder implements Encoder.ReflectionEncoder {
 
     private final TypeLiteral compTypeLiteral;
 
@@ -34,6 +34,7 @@ class ReflectionCollectionEncoder implements Encoder {
             return;
         }
         stream.writeArrayStart();
+        stream.writeIndention();
         stream.writeVal(compTypeLiteral, iter.next());
         while (iter.hasNext()) {
             stream.writeMore();

@@ -1,26 +1,32 @@
 package com.jsoniter.output;
 
-import com.jsoniter.spi.JsonException;
+import com.jsoniter.spi.*;
 import com.jsoniter.any.Any;
-import com.jsoniter.spi.Binding;
-import com.jsoniter.spi.ClassDescriptor;
-import com.jsoniter.spi.Encoder;
-import com.jsoniter.spi.JsoniterSpi;
 
 import java.io.IOException;
-import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-class ReflectionObjectEncoder implements Encoder {
+class ReflectionObjectEncoder implements Encoder.ReflectionEncoder {
 
     private final ClassDescriptor desc;
+    private final List<EncodeTo> fields = new ArrayList<EncodeTo>();
+    private final List<EncodeTo> getters = new ArrayList<EncodeTo>();
 
-    public ReflectionObjectEncoder(Class clazz) {
-        desc = JsoniterSpi.getEncodingClassDescriptor(clazz, true);
-        for (Binding binding : desc.allEncoderBindings()) {
+    public ReflectionObjectEncoder(ClassInfo classInfo) {
+        desc = ClassDescriptor.getEncodingClassDescriptor(classInfo, true);
+        for (EncodeTo encodeTo : desc.encodeTos()) {
+            Binding binding = encodeTo.binding;
             if (binding.encoder == null) {
                 // the field encoder might be registered directly
                 binding.encoder = JsoniterSpi.getEncoder(binding.encoderCacheKey());
+            }
+            if (binding.field != null) {
+                fields.add(encodeTo);
+            } else {
+                getters.add(encodeTo);
             }
         }
     }
@@ -29,6 +35,8 @@ class ReflectionObjectEncoder implements Encoder {
     public void encode(Object obj, JsonStream stream) throws IOException {
         try {
             enocde_(obj, stream);
+        } catch (JsonException e) {
+            throw e;
         } catch (Exception e) {
             throw new JsonException(e);
         }
@@ -38,18 +46,16 @@ class ReflectionObjectEncoder implements Encoder {
     public Any wrap(Object obj) {
         HashMap<String, Object> copied = new HashMap<String, Object>();
         try {
-            for (Binding field : desc.fields) {
-                Object val = field.field.get(obj);
-                for (String toName : field.toNames) {
-                    copied.put(toName, val);
-                }
+            for (EncodeTo encodeTo : fields) {
+                Object val = encodeTo.binding.field.get(obj);
+                copied.put(encodeTo.toName, val);
             }
-            for (Binding getter : desc.getters) {
-                Object val = getter.method.invoke(obj);
-                for (String toName : getter.toNames) {
-                    copied.put(toName, val);
-                }
+            for (EncodeTo getter : getters) {
+                Object val = getter.binding.method.invoke(obj);
+                copied.put(getter.toName, val);
             }
+        } catch (JsonException e) {
+            throw e;
         } catch (Exception e) {
             throw new JsonException(e);
         }
@@ -63,50 +69,58 @@ class ReflectionObjectEncoder implements Encoder {
         }
         stream.writeObjectStart();
         boolean notFirst = false;
-        for (Binding field : desc.fields) {
-            Object val = field.field.get(obj);
-            for (String toName : field.toNames) {
-                if (!(field.shouldOmitNull && val == null)) {
+        for (EncodeTo encodeTo : fields) {
+            Object val = encodeTo.binding.field.get(obj);
+            notFirst = writeEncodeTo(stream, notFirst, encodeTo, val);
+        }
+        for (EncodeTo encodeTo : getters) {
+            Object val = encodeTo.binding.method.invoke(obj);
+            notFirst = writeEncodeTo(stream, notFirst, encodeTo, val);
+        }
+        for (UnwrapperDescriptor unwrapper : desc.unwrappers) {
+            if (unwrapper.isMap) {
+                Map<Object, Object> map = (Map<Object, Object>) unwrapper.method.invoke(obj);
+                for (Map.Entry<Object, Object> entry : map.entrySet()) {
                     if (notFirst) {
                         stream.writeMore();
                     } else {
                         notFirst = true;
                     }
-                    stream.writeObjectField(toName);
-                    if (field.encoder != null) {
-                        field.encoder.encode(val, stream);
-                    } else {
-                        stream.writeVal(val);
-                    }
+                    stream.writeObjectField(entry.getKey().toString());
+                    stream.writeVal(unwrapper.mapValueTypeLiteral, entry.getValue());
                 }
+            } else {
+                if (notFirst) {
+                    stream.writeMore();
+                } else {
+                    notFirst = true;
+                }
+                unwrapper.method.invoke(obj, stream);
             }
         }
-        for (Binding getter : desc.getters) {
-            Object val = getter.method.invoke(obj);
-            for (String toName : getter.toNames) {
-                if (!(getter.shouldOmitNull && val == null)) {
-                    if (notFirst) {
-                        stream.writeMore();
-                    } else {
-                        notFirst = true;
-                    }
-                    stream.writeObjectField(toName);
-                    if (getter.encoder != null) {
-                        getter.encoder.encode(val, stream);
-                    } else {
-                        stream.writeVal(val);
-                    }
-                }
-            }
+        if (notFirst) {
+            stream.writeObjectEnd();
+        } else {
+            stream.write('}');
         }
-        for (Method unwrapper : desc.unWrappers) {
+    }
+
+    private boolean writeEncodeTo(JsonStream stream, boolean notFirst, EncodeTo encodeTo, Object val) throws IOException {
+        OmitValue defaultValueToOmit = encodeTo.binding.defaultValueToOmit;
+        if (!(defaultValueToOmit != null && defaultValueToOmit.shouldOmit(val))) {
             if (notFirst) {
                 stream.writeMore();
             } else {
+                stream.writeIndention();
                 notFirst = true;
             }
-            unwrapper.invoke(obj, stream);
+            stream.writeObjectField(encodeTo.toName);
+            if (encodeTo.binding.encoder != null) {
+                encodeTo.binding.encoder.encode(val, stream);
+            } else {
+                stream.writeVal(val);
+            }
         }
-        stream.writeObjectEnd();
+        return notFirst;
     }
 }

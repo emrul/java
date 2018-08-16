@@ -8,24 +8,14 @@ import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.lang.reflect.WildcardType;
 import java.util.*;
 
 class Codegen {
 
     // only read/write when generating code with synchronized protection
     private final static Set<String> generatedClassNames = new HashSet<String>();
-    static boolean isDoingStaticCodegen = false;
-    static DecodingMode mode = DecodingMode.REFLECTION_MODE;
-    static {
-        String envMode = System.getenv("JSONITER_DECODING_MODE");
-        if (envMode != null) {
-            mode = DecodingMode.valueOf(envMode);
-        }
-    }
-
-    public static void setMode(DecodingMode mode) {
-        Codegen.mode = mode;
-    }
+    static CodegenAccess.StaticCodegenTarget isDoingStaticCodegen = null;
 
     static Decoder getDecoder(String cacheKey, Type type) {
         Decoder decoder = JsoniterSpi.getDecoder(cacheKey);
@@ -52,56 +42,79 @@ class Codegen {
                 return decoder;
             }
         }
-        Type[] typeArgs = new Type[0];
-        Class clazz;
-        if (type instanceof ParameterizedType) {
-            ParameterizedType pType = (ParameterizedType) type;
-            clazz = (Class) pType.getRawType();
-            typeArgs = pType.getActualTypeArguments();
-        } else {
-            clazz = (Class) type;
-        }
-        decoder = CodegenImplNative.NATIVE_DECODERS.get(clazz);
+        ClassInfo classInfo = new ClassInfo(type);
+        decoder = CodegenImplNative.NATIVE_DECODERS.get(classInfo.clazz);
         if (decoder != null) {
             return decoder;
         }
-        if (mode == DecodingMode.REFLECTION_MODE) {
-            decoder = ReflectionDecoderFactory.create(clazz, typeArgs);
-            JsoniterSpi.addNewDecoder(cacheKey, decoder);
-            return decoder;
-        }
-        if (!isDoingStaticCodegen) {
-            try {
-                decoder = (Decoder) Class.forName(cacheKey).newInstance();
-                JsoniterSpi.addNewDecoder(cacheKey, decoder);
+        addPlaceholderDecoderToSupportRecursiveStructure(cacheKey);
+        try {
+            Config currentConfig = JsoniterSpi.getCurrentConfig();
+            DecodingMode mode = currentConfig.decodingMode();
+            if (mode == DecodingMode.REFLECTION_MODE) {
+                decoder = ReflectionDecoderFactory.create(classInfo);
                 return decoder;
-            } catch (Exception e) {
-                if (mode == DecodingMode.STATIC_MODE) {
-                    throw new JsonException("static gen should provide the decoder we need, but failed to create the decoder", e);
+            }
+            if (isDoingStaticCodegen == null) {
+                try {
+                    decoder = (Decoder) Class.forName(cacheKey).newInstance();
+                    return decoder;
+                } catch (Exception e) {
+                    if (mode == DecodingMode.STATIC_MODE) {
+                        throw new JsonException("static gen should provide the decoder we need, but failed to create the decoder", e);
+                    }
                 }
             }
-        }
-        String source = genSource(clazz, typeArgs);
-        source = "public static java.lang.Object decode_(com.jsoniter.JsonIterator iter) throws java.io.IOException { "
-                + source + "}";
-        if ("true".equals(System.getenv("JSONITER_DEBUG"))) {
-            System.out.println(">>> " + cacheKey);
-            System.out.println(source);
-        }
-        try {
-            generatedClassNames.add(cacheKey);
-            if (isDoingStaticCodegen) {
-                staticGen(cacheKey, source);
-            } else {
-                decoder = DynamicCodegen.gen(cacheKey, source);
+            String source = genSource(mode, classInfo);
+            source = "public static java.lang.Object decode_(com.jsoniter.JsonIterator iter) throws java.io.IOException { "
+                    + source + "}";
+            if ("true".equals(System.getenv("JSONITER_DEBUG"))) {
+                System.out.println(">>> " + cacheKey);
+                System.out.println(source);
             }
+            try {
+                generatedClassNames.add(cacheKey);
+                if (isDoingStaticCodegen == null) {
+                    decoder = DynamicCodegen.gen(cacheKey, source);
+                } else {
+                    staticGen(cacheKey, source);
+                }
+                return decoder;
+            } catch (Exception e) {
+                String msg = "failed to generate decoder for: " + classInfo + " with " + Arrays.toString(classInfo.typeArgs) + ", exception: " + e;
+                msg = msg + "\n" + source;
+                throw new JsonException(msg, e);
+            }
+        } finally {
             JsoniterSpi.addNewDecoder(cacheKey, decoder);
-            return decoder;
-        } catch (Exception e) {
-            String msg = "failed to generate decoder for: " + type + " with " + Arrays.toString(typeArgs) + ", exception: " + e;
-            msg = msg + "\n" + source;
-            throw new JsonException(msg, e);
         }
+    }
+
+    private static void addPlaceholderDecoderToSupportRecursiveStructure(final String cacheKey) {
+        JsoniterSpi.addNewDecoder(cacheKey, new Decoder() {
+            @Override
+            public Object decode(JsonIterator iter) throws IOException {
+                Decoder decoder = JsoniterSpi.getDecoder(cacheKey);
+                if (this == decoder) {
+                    for(int i = 0; i < 30; i++) {
+                        decoder = JsoniterSpi.getDecoder(cacheKey);
+                        if (this == decoder) {
+                            try {
+                                Thread.sleep(1000);
+                            } catch (InterruptedException e) {
+                                throw new JsonException(e);
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    if (this == decoder) {
+                        throw new JsonException("internal error: placeholder is not replaced with real decoder");
+                    }
+                }
+                return decoder.decode(iter);
+            }
+        });
     }
 
     public static boolean canStaticAccess(String cacheKey) {
@@ -115,6 +128,8 @@ class Codegen {
             ParameterizedType pType = (ParameterizedType) type;
             clazz = (Class) pType.getRawType();
             typeArgs = pType.getActualTypeArguments();
+        } else if (type instanceof WildcardType) {
+            return Object.class;
         } else {
             clazz = (Class) type;
         }
@@ -135,7 +150,7 @@ class Codegen {
             } else if (clazz == Set.class) {
                 clazz = implClazz == null ? HashSet.class : implClazz;
             }
-            return new ParameterizedTypeImpl(new Type[]{compType}, null, clazz);
+            return GenericsHelper.createParameterizedType(new Type[]{compType}, null, clazz);
         }
         if (Map.class.isAssignableFrom(clazz)) {
             Type keyType = String.class;
@@ -150,19 +165,20 @@ class Codegen {
                         "can not bind to generic collection without argument types, " +
                                 "try syntax like TypeLiteral<Map<String, String>>{}");
             }
-            if (keyType != String.class) {
-                throw new IllegalArgumentException("map key must be String");
-            }
             if (clazz == Map.class) {
                 clazz = implClazz == null ? HashMap.class : implClazz;
             }
-            return new ParameterizedTypeImpl(new Type[]{keyType, valueType}, null, clazz);
+            if (keyType == Object.class) {
+                keyType = String.class;
+            }
+            MapKeyDecoders.registerOrGetExisting(keyType);
+            return GenericsHelper.createParameterizedType(new Type[]{keyType, valueType}, null, clazz);
         }
         if (implClazz != null) {
             if (typeArgs.length == 0) {
                 return implClazz;
             } else {
-                return new ParameterizedTypeImpl(typeArgs, null, implClazz);
+                return GenericsHelper.createParameterizedType(typeArgs, null, implClazz);
             }
         }
         return type;
@@ -171,7 +187,7 @@ class Codegen {
     private static void staticGen(String cacheKey, String source) throws IOException {
         createDir(cacheKey);
         String fileName = cacheKey.replace('.', '/') + ".java";
-        FileOutputStream fileOutputStream = new FileOutputStream(fileName);
+        FileOutputStream fileOutputStream = new FileOutputStream(new File(isDoingStaticCodegen.outputDir, fileName));
         try {
             OutputStreamWriter writer = new OutputStreamWriter(fileOutputStream);
             try {
@@ -198,7 +214,7 @@ class Codegen {
 
     private static void createDir(String cacheKey) {
         String[] parts = cacheKey.split("\\.");
-        File parent = new File(".");
+        File parent = new File(isDoingStaticCodegen.outputDir);
         for (int i = 0; i < parts.length - 1; i++) {
             String part = parts[i];
             File current = new File(parent, part);
@@ -207,28 +223,28 @@ class Codegen {
         }
     }
 
-    private static String genSource(Class clazz, Type[] typeArgs) {
-        if (clazz.isArray()) {
-            return CodegenImplArray.genArray(clazz);
+    private static String genSource(DecodingMode mode, ClassInfo classInfo) {
+        if (classInfo.clazz.isArray()) {
+            return CodegenImplArray.genArray(classInfo);
         }
-        if (Map.class.isAssignableFrom(clazz)) {
-            return CodegenImplMap.genMap(clazz, typeArgs);
+        if (Map.class.isAssignableFrom(classInfo.clazz)) {
+            return CodegenImplMap.genMap(classInfo);
         }
-        if (Collection.class.isAssignableFrom(clazz)) {
-            return CodegenImplArray.genCollection(clazz, typeArgs);
+        if (Collection.class.isAssignableFrom(classInfo.clazz)) {
+            return CodegenImplArray.genCollection(classInfo);
         }
-        if (clazz.isEnum()) {
-            return CodegenImplEnum.genEnum(clazz);
+        if (classInfo.clazz.isEnum()) {
+            return CodegenImplEnum.genEnum(classInfo);
         }
-        ClassDescriptor desc = JsoniterSpi.getDecodingClassDescriptor(clazz, false);
-        if (shouldUseStrictMode(desc)) {
-            return CodegenImplObjectStrict.genObjectUsingStrict(clazz, desc);
+        ClassDescriptor desc = ClassDescriptor.getDecodingClassDescriptor(classInfo, false);
+        if (shouldUseStrictMode(mode, desc)) {
+            return CodegenImplObjectStrict.genObjectUsingStrict(desc);
         } else {
-            return CodegenImplObjectHash.genObjectUsingHash(clazz, desc);
+            return CodegenImplObjectHash.genObjectUsingHash(desc);
         }
     }
 
-    private static boolean shouldUseStrictMode(ClassDescriptor desc) {
+    private static boolean shouldUseStrictMode(DecodingMode mode, ClassDescriptor desc) {
         if (mode == DecodingMode.DYNAMIC_MODE_AND_MATCH_FIELD_STRICTLY) {
             return true;
         }
@@ -243,14 +259,24 @@ class Codegen {
             // only slice support unknown field tracking
             return true;
         }
-        if (allBindings.isEmpty()) {
+        if (!desc.keyValueTypeWrappers.isEmpty()) {
+            return true;
+        }
+        boolean hasBinding = false;
+        for (Binding allBinding : allBindings) {
+            if (allBinding.fromNames.length > 0) {
+                hasBinding = true;
+            }
+        }
+        if (!hasBinding) {
+            // empty object can only be handled by strict mode
             return true;
         }
         return false;
     }
 
-    public static void staticGenDecoders(TypeLiteral[] typeLiterals) {
-        isDoingStaticCodegen = true;
+    public static void staticGenDecoders(TypeLiteral[] typeLiterals, CodegenAccess.StaticCodegenTarget staticCodegenTarget) {
+        isDoingStaticCodegen = staticCodegenTarget;
         for (TypeLiteral typeLiteral : typeLiterals) {
             gen(typeLiteral.getDecoderCacheKey(), typeLiteral.getType());
         }

@@ -1,44 +1,54 @@
 package com.jsoniter.output;
 
-import com.jsoniter.*;
-import com.jsoniter.CodegenAccess;
 import com.jsoniter.spi.*;
 
-import java.lang.reflect.Method;
 import java.util.*;
 
 class CodegenImplObject {
-    public static CodegenResult genObject(Class clazz) {
-
+    public static CodegenResult genObject(ClassInfo classInfo) {
+        boolean noIndention = JsoniterSpi.getCurrentConfig().indentionStep() == 0;
         CodegenResult ctx = new CodegenResult();
-        ClassDescriptor desc = JsoniterSpi.getEncodingClassDescriptor(clazz, false);
-        HashMap<String, Binding> bindings = new HashMap<String, Binding>();
-        for (Binding binding : desc.allEncoderBindings()) {
-            for (String toName : binding.toNames) {
-                bindings.put(toName, binding);
-            }
-        }
-        ArrayList<String> toNames = new ArrayList<String>(bindings.keySet());
-        Collections.sort(toNames, new Comparator<String>() {
-            @Override
-            public int compare(String o1, String o2) {
-                int x = CodegenAccess.calcHash(o1);
-                int y = CodegenAccess.calcHash(o2);
-                return (x < y) ? -1 : ((x == y) ? 0 : 1);
-            }
-        });
-        ctx.append(String.format("public static void encode_(%s obj, com.jsoniter.output.JsonStream stream) throws java.io.IOException {", clazz.getCanonicalName()));
+        ClassDescriptor desc = ClassDescriptor.getEncodingClassDescriptor(classInfo, false);
+        List<EncodeTo> encodeTos = desc.encodeTos();
+        ctx.append(String.format("public static void encode_(%s obj, com.jsoniter.output.JsonStream stream) throws java.io.IOException {", classInfo.clazz.getCanonicalName()));
         if (hasFieldOutput(desc)) {
             int notFirst = 0;
-            ctx.buffer('{');
-            for (String toName : toNames) {
-                notFirst = genField(ctx, bindings.get(toName), toName, notFirst);
+            if (noIndention) {
+                ctx.buffer('{');
+            } else {
+                ctx.append("stream.writeObjectStart();");
             }
-            for (Method unwrapper : desc.unWrappers) {
-                notFirst = appendComma(ctx, notFirst);
-                ctx.append(String.format("obj.%s(stream);", unwrapper.getName()));
+            for (EncodeTo encodeTo : encodeTos) {
+                notFirst = genField(ctx, encodeTo.binding, encodeTo.toName, notFirst);
             }
-            ctx.buffer('}');
+            for (UnwrapperDescriptor unwrapper : desc.unwrappers) {
+                if (unwrapper.isMap) {
+                    ctx.append(String.format("java.util.Map map = (java.util.Map)obj.%s();", unwrapper.method.getName()));
+                    ctx.append("java.util.Iterator iter = map.entrySet().iterator();");
+                    ctx.append("while(iter.hasNext()) {");
+                    ctx.append("java.util.Map.Entry entry = (java.util.Map.Entry)iter.next();");
+                    notFirst = appendComma(ctx, notFirst);
+                    ctx.append("stream.writeObjectField(entry.getKey().toString());");
+                    ctx.append("if (entry.getValue() == null) { stream.writeNull(); } else {");
+                    CodegenImplNative.genWriteOp(ctx, "entry.getValue()", unwrapper.mapValueTypeLiteral.getType(), true);
+                    ctx.append("}");
+                    ctx.append("}");
+                } else {
+                    notFirst = appendComma(ctx, notFirst);
+                    ctx.append(String.format("obj.%s(stream);", unwrapper.method.getName()));
+                }
+            }
+            if (noIndention) {
+                ctx.buffer('}');
+            } else {
+                if (notFirst == 1) { // definitely not first
+                    ctx.append("stream.writeObjectEnd();");
+                } else if (notFirst == 2) { // // maybe not first, previous field is omitNull
+                    ctx.append("if (notFirst) { stream.writeObjectEnd(); } else { stream.write('}'); }");
+                } else { // this is the first
+                    ctx.append("stream.write('}');");
+                }
+            }
         } else {
             ctx.buffer("{}");
         }
@@ -48,18 +58,14 @@ class CodegenImplObject {
 
 
     private static boolean hasFieldOutput(ClassDescriptor desc) {
-        if (!desc.unWrappers.isEmpty()) {
+        if (!desc.unwrappers.isEmpty()) {
             return true;
         }
-        for (Binding binding : desc.allEncoderBindings()) {
-            if (binding.toNames.length > 0) {
-                return true;
-            }
-        }
-        return false;
+        return !desc.encodeTos().isEmpty();
     }
 
     private static int genField(CodegenResult ctx, Binding binding, String toName, int notFirst) {
+        boolean noIndention = JsoniterSpi.getCurrentConfig().indentionStep() == 0;
         String fieldCacheKey = binding.encoderCacheKey();
         Encoder encoder = JsoniterSpi.getEncoder(fieldCacheKey);
         boolean isCollectionValueNullable = binding.isCollectionValueNullable;
@@ -76,32 +82,36 @@ class CodegenImplObject {
             isCollectionValueNullable = true;
         }
         boolean nullable = !valueClazz.isPrimitive();
+        boolean omitZero = JsoniterSpi.getCurrentConfig().omitDefaultValue();
         if (!binding.isNullable) {
             nullable = false;
         }
-        if (nullable) {
-            if (binding.shouldOmitNull) {
-                if (notFirst == 0) { // no previous field
-                    notFirst = 2; // maybe
-                    ctx.append("boolean notFirst = false;");
-                }
-                ctx.append(String.format("if (%s != null) {", valueAccessor));
-                notFirst = appendComma(ctx, notFirst);
+        if (binding.defaultValueToOmit != null) {
+            if (notFirst == 0) { // no previous field
+                notFirst = 2; // maybe
+                ctx.append("boolean notFirst = false;");
+            }
+
+            ctx.append("if (!(" + String.format(binding.defaultValueToOmit.code(), valueAccessor)+ ")) {");
+            notFirst = appendComma(ctx, notFirst);
+            if (noIndention) {
                 ctx.append(CodegenResult.bufferToWriteOp("\"" + toName + "\":"));
             } else {
-                notFirst = appendComma(ctx, notFirst);
+                ctx.append(String.format("stream.writeObjectField(\"%s\");", toName));
+            }
+        } else {
+            notFirst = appendComma(ctx, notFirst);
+            if (noIndention) {
                 ctx.buffer('"');
                 ctx.buffer(toName);
                 ctx.buffer('"');
                 ctx.buffer(':');
+            } else {
+                ctx.append(String.format("stream.writeObjectField(\"%s\");", toName));
+            }
+            if (nullable) {
                 ctx.append(String.format("if (%s == null) { stream.writeNull(); } else {", valueAccessor));
             }
-        } else {
-            notFirst = appendComma(ctx, notFirst);
-            ctx.buffer('"');
-            ctx.buffer(toName);
-            ctx.buffer('"');
-            ctx.buffer(':');
         }
         if (encoder == null) {
             CodegenImplNative.genWriteOp(ctx, valueAccessor, binding.valueType, nullable, isCollectionValueNullable);
@@ -109,19 +119,31 @@ class CodegenImplObject {
             ctx.append(String.format("com.jsoniter.output.CodegenAccess.writeVal(\"%s\", %s, stream);",
                     fieldCacheKey, valueAccessor));
         }
-        if (nullable) {
+        if (nullable || omitZero) {
             ctx.append("}");
         }
         return notFirst;
     }
 
     private static int appendComma(CodegenResult ctx, int notFirst) {
+        boolean noIndention = JsoniterSpi.getCurrentConfig().indentionStep() == 0;
         if (notFirst == 1) { // definitely not first
-            ctx.buffer(',');
+            if (noIndention) {
+                ctx.buffer(',');
+            } else {
+                ctx.append("stream.writeMore();");
+            }
         } else if (notFirst == 2) { // maybe not first, previous field is omitNull
-            ctx.append("if (notFirst) { stream.write(','); } else { notFirst = true; }");
+            if (noIndention) {
+                ctx.append("if (notFirst) { stream.write(','); } else { notFirst = true; }");
+            } else {
+                ctx.append("if (notFirst) { stream.writeMore(); } else { stream.writeIndention(); notFirst = true; }");
+            }
         } else { // this is the first, do not write comma
             notFirst = 1;
+            if (!noIndention) {
+                ctx.append("stream.writeIndention();");
+            }
         }
         return notFirst;
     }

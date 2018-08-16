@@ -1,24 +1,27 @@
 package com.jsoniter.output;
 
 import com.jsoniter.any.Any;
-import com.jsoniter.spi.Encoder;
-import com.jsoniter.spi.TypeLiteral;
+import com.jsoniter.spi.*;
 
 import java.io.IOException;
 import java.lang.reflect.Type;
-import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 
-class ReflectionMapEncoder implements Encoder {
+class ReflectionMapEncoder implements Encoder.ReflectionEncoder {
 
     private final TypeLiteral valueTypeLiteral;
+    private final Encoder mapKeyEncoder;
 
     public ReflectionMapEncoder(Class clazz, Type[] typeArgs) {
-        if (typeArgs.length > 1) {
-            valueTypeLiteral = TypeLiteral.create(typeArgs[1]);
-        } else {
-            valueTypeLiteral = TypeLiteral.create(Object.class);
+        Type keyType = Object.class;
+        Type valueType = Object.class;
+        if (typeArgs.length == 2) {
+            keyType = typeArgs[0];
+            valueType = typeArgs[1];
         }
+        mapKeyEncoder = MapKeyEncoders.registerOrGetExisting(keyType);
+        valueTypeLiteral = TypeLiteral.create(valueType);
     }
 
     @Override
@@ -27,19 +30,33 @@ class ReflectionMapEncoder implements Encoder {
             stream.writeNull();
             return;
         }
-        Map<String, Object> map = (Map<String, Object>) obj;
+        Map<Object, Object> map = (Map<Object, Object>) obj;
+        Iterator<Map.Entry<Object, Object>> iter = map.entrySet().iterator();
+        if (!iter.hasNext()) {
+            stream.write((byte) '{', (byte) '}');
+            return;
+        }
         stream.writeObjectStart();
         boolean notFirst = false;
-        for (Map.Entry<String, Object> entry : map.entrySet()) {
-            if (notFirst) {
-                stream.writeMore();
-            } else {
-                notFirst = true;
-            }
-            stream.writeObjectField(entry.getKey());
-            stream.writeVal(valueTypeLiteral, entry.getValue());
+        Map.Entry<Object, Object> entry = iter.next();
+        notFirst = writeEntry(stream, notFirst, entry);
+        while (iter.hasNext()) {
+            entry = iter.next();
+            notFirst = writeEntry(stream, notFirst, entry);
         }
         stream.writeObjectEnd();
+    }
+
+    private boolean writeEntry(JsonStream stream, boolean notFirst, Map.Entry<Object, Object> entry) throws IOException {
+        if (notFirst) {
+            stream.writeMore();
+        } else {
+            stream.writeIndention();
+            notFirst = true;
+        }
+        stream.writeObjectField(entry.getKey(), mapKeyEncoder);
+        stream.writeVal(valueTypeLiteral, entry.getValue());
+        return notFirst;
     }
 
     @Override

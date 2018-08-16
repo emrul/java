@@ -1,13 +1,12 @@
 package com.jsoniter;
 
-import com.jsoniter.annotation.JsoniterAnnotationSupport;
 import com.jsoniter.any.Any;
-import com.jsoniter.spi.JsonException;
-import com.jsoniter.spi.TypeLiteral;
+import com.jsoniter.spi.*;
 
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Type;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -17,6 +16,7 @@ import java.util.Map;
 
 public class JsonIterator implements Closeable {
 
+    public Config configCache;
     private static boolean isStreamingEnabled = false;
     final static ValueType[] valueTypes = new ValueType[256];
     InputStream in;
@@ -104,6 +104,7 @@ public class JsonIterator implements Closeable {
     }
 
     public final void reset(InputStream in) {
+        JsonIterator.enableStreamingSupport();
         this.in = in;
         this.head = 0;
         this.tail = 0;
@@ -188,6 +189,11 @@ public class JsonIterator implements Closeable {
         return IterImplArray.readArray(this);
     }
 
+    public String readNumberAsString() throws IOException {
+        IterImplForStreaming.numberChars numberChars = IterImplForStreaming.readNumber(this);
+        return new String(numberChars.chars, 0, numberChars.charsLength);
+    }
+
     public static interface ReadArrayCallback {
         boolean handle(JsonIterator iter, Object attachment) throws IOException;
     }
@@ -226,18 +232,30 @@ public class JsonIterator implements Closeable {
 
     public final BigDecimal readBigDecimal() throws IOException {
         // skip whitespace by read next
-        if (whatIsNext() != ValueType.NUMBER) {
+        ValueType valueType = whatIsNext();
+        if (valueType == ValueType.NULL) {
+            skip();
+            return null;
+        }
+        if (valueType != ValueType.NUMBER) {
             throw reportError("readBigDecimal", "not number");
         }
-        return new BigDecimal(IterImplForStreaming.readNumber(this));
+        IterImplForStreaming.numberChars numberChars = IterImplForStreaming.readNumber(this);
+        return new BigDecimal(numberChars.chars, 0, numberChars.charsLength);
     }
 
     public final BigInteger readBigInteger() throws IOException {
         // skip whitespace by read next
-        if (whatIsNext() != ValueType.NUMBER) {
+        ValueType valueType = whatIsNext();
+        if (valueType == ValueType.NULL) {
+            skip();
+            return null;
+        }
+        if (valueType != ValueType.NUMBER) {
             throw reportError("readBigDecimal", "not number");
         }
-        return new BigInteger(IterImplForStreaming.readNumber(this));
+        IterImplForStreaming.numberChars numberChars = IterImplForStreaming.readNumber(this);
+        return new BigInteger(new String(numberChars.chars, 0, numberChars.charsLength));
     }
 
     public final Any readAny() throws IOException {
@@ -273,7 +291,20 @@ public class JsonIterator implements Closeable {
                 case STRING:
                     return readString();
                 case NUMBER:
-                    return readDouble();
+                    IterImplForStreaming.numberChars numberChars = IterImplForStreaming.readNumber(this);
+                    Double number = Double.valueOf(new String(numberChars.chars, 0, numberChars.charsLength));
+                    if (numberChars.dotFound) {
+                        return number;
+                    }
+                    double doubleNumber = number;
+                    if (doubleNumber == Math.floor(doubleNumber) && !Double.isInfinite(doubleNumber)) {
+                        long longNumber = (long) doubleNumber;
+                        if (longNumber <= Integer.MAX_VALUE && longNumber >= Integer.MIN_VALUE) {
+                            return (int) longNumber;
+                        }
+                        return longNumber;
+                    }
+                    return number;
                 case NULL:
                     IterImpl.skipFixedBytes(this, 4);
                     return null;
@@ -307,10 +338,18 @@ public class JsonIterator implements Closeable {
         try {
             this.existingObject = existingObject;
             Class<?> clazz = existingObject.getClass();
-            return (T) Codegen.getDecoder(TypeLiteral.create(clazz).getDecoderCacheKey(), clazz).decode(this);
+            String cacheKey = currentConfig().getDecoderCacheKey(clazz);
+            return (T) Codegen.getDecoder(cacheKey, clazz).decode(this);
         } catch (ArrayIndexOutOfBoundsException e) {
             throw reportError("read", "premature end");
         }
+    }
+
+    private Config currentConfig() {
+        if (configCache == null) {
+            configCache = JsoniterSpi.getCurrentConfig();
+        }
+        return configCache;
     }
 
     /**
@@ -325,24 +364,25 @@ public class JsonIterator implements Closeable {
     public final <T> T read(TypeLiteral<T> typeLiteral, T existingObject) throws IOException {
         try {
             this.existingObject = existingObject;
-            return (T) Codegen.getDecoder(typeLiteral.getDecoderCacheKey(), typeLiteral.getType()).decode(this);
+            String cacheKey = currentConfig().getDecoderCacheKey(typeLiteral.getType());
+            return (T) Codegen.getDecoder(cacheKey, typeLiteral.getType()).decode(this);
         } catch (ArrayIndexOutOfBoundsException e) {
             throw reportError("read", "premature end");
         }
     }
 
     public final <T> T read(Class<T> clazz) throws IOException {
-        try {
-            return (T) Codegen.getDecoder(TypeLiteral.create(clazz).getDecoderCacheKey(), clazz).decode(this);
-        } catch (ArrayIndexOutOfBoundsException e) {
-            throw reportError("read", "premature end");
-        }
+        return (T) read((Type) clazz);
     }
 
     public final <T> T read(TypeLiteral<T> typeLiteral) throws IOException {
+        return (T) read(typeLiteral.getType());
+    }
+
+    public final Object read(Type type) throws IOException {
         try {
-            String cacheKey = typeLiteral.getDecoderCacheKey();
-            return (T) Codegen.getDecoder(cacheKey, typeLiteral.getType()).decode(this);
+            String cacheKey = currentConfig().getDecoderCacheKey(type);
+            return Codegen.getDecoder(cacheKey, type).decode(this);
         } catch (ArrayIndexOutOfBoundsException e) {
             throw reportError("read", "premature end");
         }
@@ -358,24 +398,44 @@ public class JsonIterator implements Closeable {
         IterImplSkip.skip(this);
     }
 
-    public static ThreadLocal<JsonIterator> tlsIter = new ThreadLocal<JsonIterator>() {
-        @Override
-        protected JsonIterator initialValue() {
-            return new JsonIterator();
+    public static final <T> T deserialize(Config config, String input, Class<T> clazz) {
+        JsoniterSpi.setCurrentConfig(config);
+        try {
+            return deserialize(input.getBytes(), clazz);
+        } finally {
+            JsoniterSpi.clearCurrentConfig();
         }
-    };
+    }
 
     public static final <T> T deserialize(String input, Class<T> clazz) {
         return deserialize(input.getBytes(), clazz);
+    }
+
+    public static final <T> T deserialize(Config config, String input, TypeLiteral<T> typeLiteral) {
+        JsoniterSpi.setCurrentConfig(config);
+        try {
+            return deserialize(input.getBytes(), typeLiteral);
+        } finally {
+            JsoniterSpi.clearCurrentConfig();
+        }
     }
 
     public static final <T> T deserialize(String input, TypeLiteral<T> typeLiteral) {
         return deserialize(input.getBytes(), typeLiteral);
     }
 
+    public static final <T> T deserialize(Config config, byte[] input, Class<T> clazz) {
+        JsoniterSpi.setCurrentConfig(config);
+        try {
+            return deserialize(input, clazz);
+        } finally {
+            JsoniterSpi.clearCurrentConfig();
+        }
+    }
+
     public static final <T> T deserialize(byte[] input, Class<T> clazz) {
         int lastNotSpacePos = findLastNotSpacePos(input);
-        JsonIterator iter = tlsIter.get();
+        JsonIterator iter = JsonIteratorPool.borrowJsonIterator();
         iter.reset(input, 0, lastNotSpacePos);
         try {
             T val = iter.read(clazz);
@@ -387,12 +447,23 @@ public class JsonIterator implements Closeable {
             throw iter.reportError("deserialize", "premature end");
         } catch (IOException e) {
             throw new JsonException(e);
+        } finally {
+            JsonIteratorPool.returnJsonIterator(iter);
+        }
+    }
+
+    public static final <T> T deserialize(Config config, byte[] input, TypeLiteral<T> typeLiteral) {
+        JsoniterSpi.setCurrentConfig(config);
+        try {
+            return deserialize(input, typeLiteral);
+        } finally {
+            JsoniterSpi.clearCurrentConfig();
         }
     }
 
     public static final <T> T deserialize(byte[] input, TypeLiteral<T> typeLiteral) {
         int lastNotSpacePos = findLastNotSpacePos(input);
-        JsonIterator iter = tlsIter.get();
+        JsonIterator iter = JsonIteratorPool.borrowJsonIterator();
         iter.reset(input, 0, lastNotSpacePos);
         try {
             T val = iter.read(typeLiteral);
@@ -404,6 +475,17 @@ public class JsonIterator implements Closeable {
             throw iter.reportError("deserialize", "premature end");
         } catch (IOException e) {
             throw new JsonException(e);
+        } finally {
+            JsonIteratorPool.returnJsonIterator(iter);
+        }
+    }
+
+    public static final Any deserialize(Config config, String input) {
+        JsoniterSpi.setCurrentConfig(config);
+        try {
+            return deserialize(input.getBytes());
+        } finally {
+            JsoniterSpi.clearCurrentConfig();
         }
     }
 
@@ -411,9 +493,18 @@ public class JsonIterator implements Closeable {
         return deserialize(input.getBytes());
     }
 
+    public static final Any deserialize(Config config, byte[] input) {
+        JsoniterSpi.setCurrentConfig(config);
+        try {
+            return deserialize(input);
+        } finally {
+            JsoniterSpi.clearCurrentConfig();
+        }
+    }
+
     public static final Any deserialize(byte[] input) {
         int lastNotSpacePos = findLastNotSpacePos(input);
-        JsonIterator iter = tlsIter.get();
+        JsonIterator iter = JsonIteratorPool.borrowJsonIterator();
         iter.reset(input, 0, lastNotSpacePos);
         try {
             Any val = iter.readAny();
@@ -425,11 +516,13 @@ public class JsonIterator implements Closeable {
             throw iter.reportError("deserialize", "premature end");
         } catch (IOException e) {
             throw new JsonException(e);
+        } finally {
+            JsonIteratorPool.returnJsonIterator(iter);
         }
     }
 
     private static int findLastNotSpacePos(byte[] input) {
-        for(int i = input.length - 1; i >= 0; i--) {
+        for (int i = input.length - 1; i >= 0; i--) {
             byte c = input[i];
             if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
                 return i + 1;
@@ -439,7 +532,9 @@ public class JsonIterator implements Closeable {
     }
 
     public static void setMode(DecodingMode mode) {
-        Codegen.setMode(mode);
+        Config newConfig = JsoniterSpi.getDefaultConfig().copyBuilder().decodingMode(mode).build();
+        JsoniterSpi.setDefaultConfig(newConfig);
+        JsoniterSpi.setCurrentConfig(newConfig);
     }
 
     public static void enableStreamingSupport() {
@@ -449,12 +544,10 @@ public class JsonIterator implements Closeable {
         isStreamingEnabled = true;
         try {
             DynamicCodegen.enableStreamingSupport();
+        }  catch (JsonException e) {
+            throw e;
         } catch (Exception e) {
             throw new JsonException(e);
         }
-    }
-
-    public static void enableAnnotationSupport() {
-        JsoniterAnnotationSupport.enable();
     }
 }

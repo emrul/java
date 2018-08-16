@@ -2,19 +2,24 @@ package com.jsoniter.any;
 
 import com.jsoniter.output.CodegenAccess;
 import com.jsoniter.spi.JsonException;
-import com.jsoniter.JsonIterator;
 import com.jsoniter.ValueType;
 import com.jsoniter.output.JsonStream;
 import com.jsoniter.spi.Encoder;
 import com.jsoniter.spi.TypeLiteral;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.*;
 
 public abstract class Any implements Iterable<Any> {
 
     static {
-        Encoder anyEncoder = new Encoder() {
+        registerEncoders();
+    }
+
+    public static void registerEncoders() {
+        Encoder.ReflectionEncoder anyEncoder = new Encoder.ReflectionEncoder() {
             @Override
             public void encode(Object obj, JsonStream stream) throws IOException {
                 Any any = (Any) obj;
@@ -171,6 +176,14 @@ public abstract class Any implements Iterable<Any> {
 
     public abstract double toDouble();
 
+    public final BigInteger toBigInteger(Object ...keys) { return get(keys).toBigInteger(); }
+
+    public abstract BigInteger toBigInteger();
+
+    public final BigDecimal toBigDecimal(Object ...keys) { return get(keys).toBigDecimal(); }
+
+    public abstract BigDecimal toBigDecimal();
+
     public final String toString(Object... keys) {
         return get(keys).toString();
     }
@@ -181,7 +194,15 @@ public abstract class Any implements Iterable<Any> {
         return 0;
     }
 
-    public Set<String> keys() {
+    public Any mustBeValid() {
+        if(this instanceof NotFoundAny) {
+            throw ((NotFoundAny) this).exception;
+        } else {
+            return this;
+        }
+    }
+
+    public Set keys() {
         return EMPTY_KEYS;
     }
 
@@ -231,10 +252,6 @@ public abstract class Any implements Iterable<Any> {
 
     public Any set(String newVal) {
         return wrap(newVal);
-    }
-
-    public JsonIterator parse() {
-        throw new UnsupportedOperationException();
     }
 
     public abstract void writeTo(JsonStream stream) throws IOException;
@@ -336,5 +353,23 @@ public abstract class Any implements Iterable<Any> {
 
     protected boolean isWildcard(Object key) {
         return wildcardHashCode == key.hashCode() && wildcard.equals(key);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+
+        Any any = (Any) o;
+
+        Object obj = this.object();
+        Object thatObj = any.object();
+        return obj != null ? obj.equals(thatObj) : thatObj == null;
+    }
+
+    @Override
+    public int hashCode() {
+        Object obj = this.object();
+        return obj != null ? obj.hashCode() : 0;
     }
 }

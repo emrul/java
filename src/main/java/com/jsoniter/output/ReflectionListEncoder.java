@@ -8,7 +8,7 @@ import java.io.IOException;
 import java.lang.reflect.Type;
 import java.util.List;
 
-class ReflectionListEncoder implements Encoder {
+class ReflectionListEncoder implements Encoder.ReflectionEncoder {
 
     private final TypeLiteral compTypeLiteral;
 
@@ -32,6 +32,7 @@ class ReflectionListEncoder implements Encoder {
             return;
         }
         stream.writeArrayStart();
+        stream.writeIndention();
         stream.writeVal(compTypeLiteral, list.get(0));
         for (int i = 1; i < list.size(); i++) {
             stream.writeMore();

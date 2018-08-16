@@ -1,12 +1,9 @@
 package com.jsoniter;
 
 import com.jsoniter.annotation.JsonProperty;
-import com.jsoniter.annotation.JsonWrapper;
-import com.jsoniter.annotation.JsoniterAnnotationSupport;
 import com.jsoniter.any.Any;
 import com.jsoniter.fuzzy.MaybeEmptyArrayDecoder;
 import com.jsoniter.fuzzy.MaybeStringLongDecoder;
-import com.jsoniter.output.EncodingMode;
 import com.jsoniter.output.JsonStream;
 import com.jsoniter.spi.Decoder;
 import com.jsoniter.spi.EmptyExtension;
@@ -16,10 +13,8 @@ import junit.framework.TestCase;
 
 import java.io.IOException;
 import java.lang.reflect.Type;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 public class TestDemo extends TestCase {
     public void test_bind_api() throws IOException {
@@ -63,6 +58,10 @@ public class TestDemo extends TestCase {
         System.out.println(user);
     }
 
+    public static class TestObject2 {
+
+    }
+
     public void test_empty_array_as_null() throws IOException {
         JsoniterSpi.registerExtension(new EmptyExtension() {
             @Override
@@ -71,7 +70,7 @@ public class TestDemo extends TestCase {
                     // avoid infinite loop
                     return null;
                 }
-                if (type != Date.class) {
+                if (type != TestObject2.class) {
                     return null;
                 }
                 return new Decoder() {
@@ -95,7 +94,7 @@ public class TestDemo extends TestCase {
             }
         });
         JsonIterator iter = JsonIterator.parse("[]");
-        assertNull(iter.read(Date.class));
+        assertNull(iter.read(TestObject2.class));
     }
 
     public static class Order {
@@ -170,5 +169,63 @@ public class TestDemo extends TestCase {
     public void test_deserialize() {
         String str = "{\"port\":13110}  ";
         JsonIterator.deserialize(str.getBytes(), HashMap.class);
+    }
+
+    public static class CollectionResponse<T> {
+        public List<T> results;
+    }
+
+    public static class Feed {
+        public String id;
+        public String owner;
+        public String name;
+    }
+
+    public void test_generics() {
+        CollectionResponse<Feed> objs = JsonIterator.deserialize("{\n" +
+                "\"count\": 1,\n" +
+                "\"next\": null,\n" +
+                "\"previous\": null,\n" +
+                "\"results\": [\n" +
+                "{\n" +
+                "\"id\": \"f560fccb-4020-43c1-8a27-92507ef625bd\",\n" +
+                "\"search_terms\": [\n" +
+                "\"gigi hadid\"\n" +
+                "],\n" +
+                "\"owner\": \"...\",\n" +
+                "\"egress_nodes\": [\n" +
+                "\"DE\"\n" +
+                "],\n" +
+                "\"status\": \"ACTIVE\",\n" +
+                "\"expires_at\": null,\n" +
+                "\"available_sources\": [\n" +
+                "\"92c784ae-b7bf-4434-a6cc-740109d91cc8\"\n" +
+                "],\n" +
+                "\"available_egress_nodes\": [\n" +
+                "\"DE\"\n" +
+                "],\n" +
+                "\"created_at\": \"2017-07-27T13:29:20.935108Z\",\n" +
+                "\"name\": \"Test\",\n" +
+                "\"description\": \"\",\n" +
+                "\"start_date\": null,\n" +
+                "\"end_date\": null,\n" +
+                "\"match_all_include\": false,\n" +
+                "\"velocity\": 0.0666666666666667,\n" +
+                "\"storage_consumption\": 0.000011026778,\n" +
+                "\"consumption\": 0.000120833333333333,\n" +
+                "\"persistence_enabled\": true,\n" +
+                "\"sources\": [\n" +
+                "\"92c784ae-b7bf-4434-a6cc-740109d91cc8\"\n" +
+                "],\n" +
+                "\"permissions\": {\n" +
+                "\"has_read_access\": true,\n" +
+                "\"has_write_access\": true,\n" +
+                "\"has_share_access\": true,\n" +
+                "\"has_ownership\": true\n" +
+                "}\n" +
+                "}\n" +
+                "]\n" +
+                "}", new TypeLiteral<CollectionResponse<Feed>>(){});
+        assertEquals("f560fccb-4020-43c1-8a27-92507ef625bd", objs.results.get(0).id);
     }
 }

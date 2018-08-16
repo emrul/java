@@ -1,9 +1,6 @@
 package com.jsoniter;
 
-import com.jsoniter.spi.Binding;
-import com.jsoniter.spi.ClassDescriptor;
-import com.jsoniter.spi.JsoniterSpi;
-import com.jsoniter.spi.TypeLiteral;
+import com.jsoniter.spi.*;
 import junit.framework.TestCase;
 
 import java.io.IOException;
@@ -14,7 +11,7 @@ import static org.junit.Assert.assertArrayEquals;
 public class TestGenerics extends TestCase {
 
     static {
-//        JsonIterator.setMode(DecodingMode.REFLECTION_MODE);
+//        JsonIterator.setMode(DecodingMode.DYNAMIC_MODE_AND_MATCH_FIELD_STRICTLY);
     }
 
     public void test_int_list() throws IOException {
@@ -78,12 +75,15 @@ public class TestGenerics extends TestCase {
         public B[] field2;
         public List<B>[] field3;
         public List<A[]> field4;
+
         public List<Map<A, List<B>>> getField6() {
             return null;
         }
+
         public <T> T getField7() {
             return null;
         }
+
         public void setField8(List<A> a) {
         }
     }
@@ -96,23 +96,48 @@ public class TestGenerics extends TestCase {
     }
 
     public void test_generic_super_class() throws IOException {
-        ClassDescriptor desc = JsoniterSpi.getDecodingClassDescriptor(Class3.class, true);
+        ClassDescriptor desc = ClassDescriptor.getDecodingClassDescriptor(new ClassInfo(Class3.class), true);
         Map<String, String> fieldDecoderCacheKeys = new HashMap<String, String>();
         for (Binding field : desc.allDecoderBindings()) {
             fieldDecoderCacheKeys.put(field.name, field.valueTypeLiteral.getDecoderCacheKey());
         }
-        for (Binding field : JsoniterSpi.getEncodingClassDescriptor(Class3.class, true).getters) {
+        for (Binding field : ClassDescriptor.getEncodingClassDescriptor(new ClassInfo(Class3.class), true).getters) {
             fieldDecoderCacheKeys.put(field.name, field.valueTypeLiteral.getDecoderCacheKey());
         }
-        assertEquals(new HashMap<String, String>() {{
-            put("field1", "decoder.java.util.List_java.lang.String");
-            put("field2", "decoder.java.lang.Integer_array");
-            put("field3", "decoder.java.util.List_java.lang.Integer_array");
-            put("field4", "decoder.java.util.List_java.lang.String_array");
-            put("field5", "decoder.java.lang.Float");
-            put("field6", "decoder.java.util.List_java.util.Map_java.lang.String_java.util.List_java.lang.Integer");
-            put("field7", "decoder.java.lang.Object");
-            put("field8", "decoder.java.util.List_java.lang.String");
-        }}, fieldDecoderCacheKeys);
+        assertTrue(fieldDecoderCacheKeys.get("field1").endsWith("decoder.java.util.List_java.lang.String"));
+        assertTrue(fieldDecoderCacheKeys.get("field2").endsWith("decoder.java.lang.Integer_array"));
+        assertTrue(fieldDecoderCacheKeys.get("field3").endsWith("decoder.java.util.List_java.lang.Integer_array"));
+        assertTrue(fieldDecoderCacheKeys.get("field4").endsWith("decoder.java.util.List_java.lang.String_array"));
+        assertTrue(fieldDecoderCacheKeys.get("field5").endsWith("decoder.java.lang.Float"));
+        assertTrue(fieldDecoderCacheKeys.get("field6").endsWith("decoder.java.util.List_java.util.Map_java.lang.String_java.util.List_java.lang.Integer"));
+        assertTrue(fieldDecoderCacheKeys.get("field7").endsWith("decoder.java.lang.Object"));
+        assertTrue(fieldDecoderCacheKeys.get("field8").endsWith("decoder.java.util.List_java.lang.String"));
+    }
+
+    public static class NetRes<T> {
+        public int code;
+        public String desc;
+        public T results;
+    }
+
+    public static class User {
+        public String name;
+        public int age;
+    }
+
+    public void test_issue_103() {
+        String json = "{'code':1, 'desc':'OK', 'results':{'name':'aaa', 'age':18}}".replace('\'', '\"');
+        NetRes res = JsonIterator.deserialize(json, new TypeLiteral<NetRes<User>>() {
+        });
+        assertEquals(User.class, res.results.getClass());
+    }
+
+    public static class TestObject7 {
+        public List<?> field;
+    }
+
+    public void test_wildcard() throws IOException {
+        TestObject7 obj = JsonIterator.deserialize("{\"field\":[1]}", TestObject7.class);
+        assertEquals(1, obj.field.get(0));
     }
 }

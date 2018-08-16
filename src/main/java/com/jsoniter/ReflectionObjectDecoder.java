@@ -1,8 +1,10 @@
 package com.jsoniter;
 
+import com.jsoniter.any.Any;
 import com.jsoniter.spi.*;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.util.*;
 
 class ReflectionObjectDecoder {
@@ -22,46 +24,52 @@ class ReflectionObjectDecoder {
     private int tempIdx;
     private ClassDescriptor desc;
 
-    public ReflectionObjectDecoder(Class clazz) {
+    public ReflectionObjectDecoder(ClassInfo classInfo) {
         try {
-            init(clazz);
+            init(classInfo);
+        } catch (JsonException e) {
+            throw e;
         } catch (Exception e) {
             throw new JsonException(e);
         }
     }
 
-    private final void init(Class clazz) throws Exception {
-        ClassDescriptor desc = JsoniterSpi.getDecodingClassDescriptor(clazz, true);
+    private final void init(ClassInfo classInfo) throws Exception {
+        Class clazz = classInfo.clazz;
+        ClassDescriptor desc = ClassDescriptor.getDecodingClassDescriptor(classInfo, true);
         for (Binding param : desc.ctor.parameters) {
-            addBinding(clazz, param);
+            addBinding(classInfo, param);
         }
         this.desc = desc;
         if (desc.ctor.objectFactory == null && desc.ctor.ctor == null && desc.ctor.staticFactory == null) {
             throw new JsonException("no constructor for: " + desc.clazz);
         }
         for (Binding field : desc.fields) {
-            addBinding(clazz, field);
+            addBinding(classInfo, field);
         }
         for (Binding setter : desc.setters) {
-            addBinding(clazz, setter);
+            addBinding(classInfo, setter);
         }
-        for (WrapperDescriptor setter : desc.wrappers) {
+        for (WrapperDescriptor setter : desc.bindingTypeWrappers) {
             for (Binding param : setter.parameters) {
-                addBinding(clazz, param);
+                addBinding(classInfo, param);
             }
         }
         if (requiredIdx > 63) {
             throw new JsonException("too many required properties to track");
         }
         expectedTracker = Long.MAX_VALUE >> (63 - requiredIdx);
-        if (!desc.ctor.parameters.isEmpty() || !desc.wrappers.isEmpty()) {
+        if (!desc.ctor.parameters.isEmpty() || !desc.bindingTypeWrappers.isEmpty()) {
             tempCount = tempIdx;
             tempCacheKey = "temp@" + clazz.getCanonicalName();
             ctorArgsCacheKey = "ctor@" + clazz.getCanonicalName();
         }
     }
 
-    private void addBinding(Class clazz, final Binding binding) {
+    private void addBinding(ClassInfo classInfo, final Binding binding) {
+        if (binding.fromNames.length == 0) {
+            return;
+        }
         if (binding.asMissingWhenNotPresent) {
             binding.mask = 1L << requiredIdx;
             requiredIdx++;
@@ -85,7 +93,7 @@ class ReflectionObjectDecoder {
         for (String fromName : binding.fromNames) {
             Slice slice = Slice.make(fromName);
             if (allBindings.containsKey(slice)) {
-                throw new JsonException("name conflict found in " + clazz + ": " + fromName);
+                throw new JsonException("name conflict found in " + classInfo.clazz + ": " + fromName);
             }
             allBindings.put(slice, binding);
         }
@@ -94,10 +102,10 @@ class ReflectionObjectDecoder {
 
     public Decoder create() {
         if (desc.ctor.parameters.isEmpty()) {
-            if (desc.wrappers.isEmpty()) {
+            if (desc.bindingTypeWrappers.isEmpty()) {
                 return new OnlyField();
             } else {
-                return new WithSetter();
+                return new WithWrapper();
             }
         } else {
             return new WithCtor();
@@ -109,6 +117,8 @@ class ReflectionObjectDecoder {
         public Object decode(JsonIterator iter) throws IOException {
             try {
                 return decode_(iter);
+            } catch (RuntimeException e) {
+                throw e;
             } catch (Exception e) {
                 throw new JsonException(e);
             }
@@ -172,6 +182,8 @@ class ReflectionObjectDecoder {
         public Object decode(JsonIterator iter) throws IOException {
             try {
                 return decode_(iter);
+            } catch (RuntimeException e) {
+                throw e;
             } catch (Exception e) {
                 throw new JsonException(e);
             }
@@ -228,7 +240,7 @@ class ReflectionObjectDecoder {
             setExtra(obj, extra);
             for (Binding field : desc.fields) {
                 Object val = temp[field.idx];
-                if (val != NOT_SET) {
+                if (val != NOT_SET && field.fromNames.length > 0) {
                     field.field.set(obj, val);
                 }
             }
@@ -243,12 +255,14 @@ class ReflectionObjectDecoder {
         }
     }
 
-    public class WithSetter implements Decoder {
+    public class WithWrapper implements Decoder {
 
         @Override
         public Object decode(JsonIterator iter) throws IOException {
             try {
                 return decode_(iter);
+            } catch (RuntimeException e) {
+                throw e;
             } catch (Exception e) {
                 throw new JsonException(e);
             }
@@ -333,8 +347,23 @@ class ReflectionObjectDecoder {
     }
 
     private void setExtra(Object obj, Map<String, Object> extra) throws Exception {
-        if (desc.onExtraProperties != null) {
-            setToBinding(obj, desc.onExtraProperties, extra);
+        if (extra == null) {
+            return;
+        }
+        if (desc.asExtraForUnknownProperties) {
+            if (desc.onExtraProperties == null) {
+                for (String fieldName : extra.keySet()) {
+                    throw new JsonException("unknown property: " + fieldName);
+                }
+            } else {
+                setToBinding(obj, desc.onExtraProperties, extra);
+            }
+        }
+        for (Method wrapper : desc.keyValueTypeWrappers) {
+            for (Map.Entry<String, Object> entry : extra.entrySet()) {
+                Any value = (Any) entry.getValue();
+                wrapper.invoke(obj, entry.getKey(), value.object());
+            }
         }
     }
 
@@ -356,15 +385,13 @@ class ReflectionObjectDecoder {
     }
 
     private Map<String, Object> onUnknownProperty(JsonIterator iter, Slice fieldName, Map<String, Object> extra) throws IOException {
-        if (desc.asExtraForUnknownProperties) {
-            if (desc.onExtraProperties == null) {
-                throw new JsonException("unknown property: " + fieldName.toString());
-            } else {
-                if (extra == null) {
-                    extra = new HashMap<String, Object>();
-                }
-                extra.put(fieldName.toString(), iter.readAny());
+        boolean shouldReadValue = desc.asExtraForUnknownProperties || !desc.keyValueTypeWrappers.isEmpty();
+        if (shouldReadValue) {
+            Any value = iter.readAny();
+            if (extra == null) {
+                extra = new HashMap<String, Object>();
             }
+            extra.put(fieldName.toString(), value);
         } else {
             iter.skip();
         }
@@ -383,10 +410,13 @@ class ReflectionObjectDecoder {
     }
 
     private void applyWrappers(Object[] temp, Object obj) throws Exception {
-        for (WrapperDescriptor wrapper : desc.wrappers) {
+        for (WrapperDescriptor wrapper : desc.bindingTypeWrappers) {
             Object[] args = new Object[wrapper.parameters.size()];
             for (int i = 0; i < wrapper.parameters.size(); i++) {
-                args[i] = temp[wrapper.parameters.get(i).idx];
+                Object arg = temp[wrapper.parameters.get(i).idx];
+                if (arg != NOT_SET) {
+                    args[i] = arg;
+                }
             }
             wrapper.method.invoke(obj, args);
         }

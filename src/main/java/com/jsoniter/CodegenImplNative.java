@@ -6,6 +6,7 @@ import com.jsoniter.spi.*;
 import java.io.IOException;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.lang.reflect.WildcardType;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.HashMap;
@@ -21,14 +22,14 @@ class CodegenImplNative {
         put("int", "iter.readInt()");
         put("char", "iter.readInt()");
         put("long", "iter.readLong()");
-        put(Float.class.getName(), "java.lang.Float.valueOf(iter.readFloat())");
-        put(Double.class.getName(), "java.lang.Double.valueOf(iter.readDouble())");
-        put(Boolean.class.getName(), "java.lang.Boolean.valueOf(iter.readBoolean())");
-        put(Byte.class.getName(), "java.lang.Byte.valueOf((byte)iter.readShort())");
-        put(Character.class.getName(), "java.lang.Character.valueOf((char)iter.readShort())");
-        put(Short.class.getName(), "java.lang.Short.valueOf(iter.readShort())");
-        put(Integer.class.getName(), "java.lang.Integer.valueOf(iter.readInt())");
-        put(Long.class.getName(), "java.lang.Long.valueOf(iter.readLong())");
+        put(Float.class.getName(), "(iter.readNull() ? null : java.lang.Float.valueOf(iter.readFloat()))");
+        put(Double.class.getName(), "(iter.readNull() ? null : java.lang.Double.valueOf(iter.readDouble()))");
+        put(Boolean.class.getName(), "(iter.readNull() ? null : java.lang.Boolean.valueOf(iter.readBoolean()))");
+        put(Byte.class.getName(), "(iter.readNull() ? null : java.lang.Byte.valueOf((byte)iter.readShort()))");
+        put(Character.class.getName(), "(iter.readNull() ? null : java.lang.Character.valueOf((char)iter.readShort()))");
+        put(Short.class.getName(), "(iter.readNull() ? null : java.lang.Short.valueOf(iter.readShort()))");
+        put(Integer.class.getName(), "(iter.readNull() ? null : java.lang.Integer.valueOf(iter.readInt()))");
+        put(Long.class.getName(), "(iter.readNull() ? null : java.lang.Long.valueOf(iter.readLong()))");
         put(BigDecimal.class.getName(), "iter.readBigDecimal()");
         put(BigInteger.class.getName(), "iter.readBigInteger()");
         put(String.class.getName(), "iter.readString()");
@@ -45,7 +46,7 @@ class CodegenImplNative {
         put(Float.class, new Decoder() {
             @Override
             public Object decode(JsonIterator iter) throws IOException {
-                return iter.readFloat();
+                return iter.readNull() ? null : iter.readFloat();
             }
         });
         put(double.class, new Decoder() {
@@ -57,7 +58,7 @@ class CodegenImplNative {
         put(Double.class, new Decoder() {
             @Override
             public Object decode(JsonIterator iter) throws IOException {
-                return iter.readDouble();
+                return iter.readNull() ? null : iter.readDouble();
             }
         });
         put(boolean.class, new Decoder() {
@@ -69,19 +70,19 @@ class CodegenImplNative {
         put(Boolean.class, new Decoder() {
             @Override
             public Object decode(JsonIterator iter) throws IOException {
-                return iter.readBoolean();
+                return iter.readNull() ? null : iter.readBoolean();
             }
         });
         put(byte.class, new Decoder() {
             @Override
             public Object decode(JsonIterator iter) throws IOException {
-                return iter.readShort();
+                return Byte.valueOf((byte) iter.readShort());
             }
         });
         put(Byte.class, new Decoder() {
             @Override
             public Object decode(JsonIterator iter) throws IOException {
-                return iter.readShort();
+                return iter.readNull() ? null : (byte)iter.readShort();
             }
         });
         put(short.class, new Decoder() {
@@ -93,7 +94,7 @@ class CodegenImplNative {
         put(Short.class, new Decoder() {
             @Override
             public Object decode(JsonIterator iter) throws IOException {
-                return iter.readShort();
+                return iter.readNull() ? null : iter.readShort();
             }
         });
         put(int.class, new Decoder() {
@@ -105,7 +106,7 @@ class CodegenImplNative {
         put(Integer.class, new Decoder() {
             @Override
             public Object decode(JsonIterator iter) throws IOException {
-                return iter.readInt();
+                return iter.readNull() ? null : iter.readInt();
             }
         });
         put(char.class, new Decoder() {
@@ -117,7 +118,7 @@ class CodegenImplNative {
         put(Character.class, new Decoder() {
             @Override
             public Object decode(JsonIterator iter) throws IOException {
-                return (char)iter.readInt();
+                return iter.readNull() ? null : (char)iter.readInt();
             }
         });
         put(long.class, new Decoder() {
@@ -129,7 +130,7 @@ class CodegenImplNative {
         put(Long.class, new Decoder() {
             @Override
             public Object decode(JsonIterator iter) throws IOException {
-                return iter.readLong();
+                return iter.readNull() ? null : iter.readLong();
             }
         });
         put(BigDecimal.class, new Decoder() {
@@ -177,6 +178,8 @@ class CodegenImplNative {
             ParameterizedType pType = (ParameterizedType) fieldType;
             Class clazz = (Class) pType.getRawType();
             return clazz.getCanonicalName();
+        } else if (fieldType instanceof WildcardType) {
+            return Object.class.getCanonicalName();
         } else {
             throw new JsonException("unsupported type: " + fieldType);
         }
@@ -204,6 +207,8 @@ class CodegenImplNative {
                     if (nativeRead != null) {
                         return nativeRead;
                     }
+                } else if (valueType instanceof WildcardType) {
+                    return NATIVE_READS.get(Object.class.getCanonicalName());
                 }
                 Codegen.getDecoder(cacheKey, valueType);
                 if (Codegen.canStaticAccess(cacheKey)) {

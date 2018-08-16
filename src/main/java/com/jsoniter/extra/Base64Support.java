@@ -1,8 +1,7 @@
 package com.jsoniter.extra;
 
 import com.jsoniter.JsonIterator;
-import com.jsoniter.Slice;
-import com.jsoniter.any.Any;
+import com.jsoniter.spi.Slice;
 import com.jsoniter.output.JsonStream;
 import com.jsoniter.spi.Decoder;
 import com.jsoniter.spi.Encoder;
@@ -12,7 +11,7 @@ import com.jsoniter.spi.JsoniterSpi;
 import java.io.IOException;
 
 /**
- * byte[] <=> base64
+ * byte[] &lt;=&gt; base64
  */
 public class Base64Support {
     private static boolean enabled;
@@ -35,11 +34,6 @@ public class Base64Support {
                 stream.write('"');
                 Base64.encodeToBytes(bytes, stream);
                 stream.write('"');
-            }
-
-            @Override
-            public Any wrap(Object obj) {
-                return null;
             }
         });
     }

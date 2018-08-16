@@ -1,9 +1,6 @@
 package com.jsoniter.output;
 
-import com.jsoniter.spi.Decoder;
-import com.jsoniter.spi.EmptyEncoder;
 import com.jsoniter.spi.Encoder;
-import com.sun.org.apache.xml.internal.utils.StringBufferPool;
 import javassist.*;
 
 class DynamicCodegen {
@@ -18,7 +15,6 @@ class DynamicCodegen {
         source.flushBuffer();
         CtClass ctClass = pool.makeClass(cacheKey);
         ctClass.setInterfaces(new CtClass[]{pool.get(Encoder.class.getName())});
-        ctClass.setSuperclass(pool.get(EmptyEncoder.class.getName()));
         String staticCode = source.toString();
         CtMethod staticMethod = CtNewMethod.make(staticCode, ctClass);
         ctClass.addMethod(staticMethod);
